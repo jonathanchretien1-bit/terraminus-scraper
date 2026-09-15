@@ -9,26 +9,34 @@ chromium.use(stealth);
   const page = await context.newPage();
 
   try {
-    // Navigation sur Centris (page des terrains)
+    // Navigation sur Centris
     await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'domcontentloaded' });
     
-    // Attendre le chargement des fiches ou de la carte
-    await page.waitForTimeout(5000);
+    // Attendre que les cartes de propriétés s'affichent
+    await page.waitForSelector('.property-card-container, .desc', { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(3000);
 
-    // Extraction des données de base
-    const listings = await page.$$eval('.property-card', cards => {
+    // Extraction des fiches avec les bons sélecteurs Centris
+    const listings = await page.$$eval('.property-card-container', cards => {
       return cards.map(card => {
+        const priceEl = card.querySelector('.price');
+        const linkEl = card.querySelector('a.property-thumbnail');
+        const addressEl = card.querySelector('.address');
+        
         return {
-          url: card.querySelector('a')?.href || '',
-          price: card.querySelector('.price')?.innerText || '',
+          url: linkEl ? linkEl.href : '',
+          price: priceEl ? priceEl.innerText.trim() : '',
+          address: addressEl ? addressEl.innerText.trim() : ''
         };
       });
     });
 
-    console.log(`${listings.length} terrains trouvés. Envoi vers Base44...`);
+    console.log(`${listings.length} terrains extraits de la page.`);
 
-    // Envoi des données vers ton endpoint Base44 sécurisé
-    const response = await fetch('https://earth-minus-scale.base44.app/functions/runCentrisScrape', {
+    // Envoi sécurisé vers ton endpoint Base44
+    const base44Url = 'https://earth-minus-scale.base44.app/functions/runCentrisScrape'; // Remplace par ta vraie URL
+    
+    const response = await fetch(base44Url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
