@@ -1,0 +1,26 @@
+name: Daily Centris Scraper
+
+on:
+  schedule:
+    - cron: '0 4 * * *' # S'exécute tous les jours à 4h00 du matin (UTC)
+  workflow_dispatch: # Permet de le lancer manuellement depuis l'interface GitHub
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install playwright-extra puppeteer-extra-plugin-stealth playwright
+
+      - name: Run Scraper Script
+        env:
+          CENTRIS_INGEST_SECRET: ${{ secrets.CENTRIS_INGEST_SECRET }}
+        run: node scraper.js
