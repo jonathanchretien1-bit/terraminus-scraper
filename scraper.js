@@ -14,41 +14,34 @@ chromium.use(stealth);
     console.log('Navigation sur Centris...');
     await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'networkidle' });
     
-    // Attendre un peu pour laisser le JS de Centris s'exécuter
     await page.waitForTimeout(5000);
 
-    // Afficher le titre de la page pour voir si on est bloqué ou non
-    const pageTitle = await page.title();
-    console.log('Titre de la page récupérée :', pageTitle);
-
-    // Extraction large de tous les blocs potentiels
-    const listings = await page.$$eval('.property-card-container, .teaser, div[data-id]', cards => {
-      return cards.map(card => {
-        const priceEl = card.querySelector('.price, [itemprop="price"]');
-        const linkEl = card.querySelector('a.property-thumbnail, a');
-        const addressEl = card.querySelector('.address, [itemprop="address"]');
-        
-        return {
-          url: linkEl ? linkEl.href : '',
-          price: priceEl ? priceEl.innerText.trim() : '',
-          address: addressEl ? addressEl.innerText.trim() : ''
-        };
-      }).filter(item => item.url && item.url.includes('/property/'));
+    // Recherche de n'importe quel lien pointant vers une propriété pour inspecter la structure
+    const listings = await page.$$eval('a', links => {
+      return links
+        .map(link => ({ href: link.href, text: link.innerText }))
+        .filter(item => item.href.includes('/en/') || item.href.includes('/fr/') && item.href.includes('-a-vendre/'))
+        .map(item => ({ url: item.href, price: '', address: item.text }));
     });
 
-    console.log(`${listings.length} terrains extraits de la page.`);
+    // Supprimer les doublons d'URL
+    const uniqueListings = Array.from(new Set(listings.map(s => s.url)))
+      .map(url => listings.find(s => s.url === url));
 
-    // Envoi vers Base44 (même si listings est vide, pour tester si le secret passe enfin)
+    console.log(`${uniqueListings.length} liens de propriétés extraits.`);
+
+    // Envoi vers Base44
     const base44Url = 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
     
-    console.log('Envoi vers Base44 avec le secret...');
+    console.log('Envoi vers Base44 (Valeur du secret présente ?:', !!process.env.CENTRIS_INGEST_SECRET, ')');
+    
     const response = await fetch(base44Url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-ingest-secret': process.env.CENTRIS_INGEST_SECRET || ''
       },
-      body: JSON.stringify({ listings })
+      body: JSON.stringify({ listings: uniqueListings })
     });
 
     const result = await response.json();
