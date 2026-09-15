@@ -2,8 +2,8 @@ name: Daily Centris Scraper
 
 on:
   schedule:
-    - cron: '0 4 * * *' # S'exécute tous les jours à 4h00 du matin (UTC)
-  workflow_dispatch: # Permet de le lancer manuellement depuis l'interface GitHub
+    - cron: '0 4 * * *'
+  workflow_dispatch:
 
 jobs:
   scrape:
@@ -19,6 +19,9 @@ jobs:
 
       - name: Install dependencies
         run: npm install playwright-extra puppeteer-extra-plugin-stealth playwright
+
+      - name: Install Playwright Browsers
+        run: npx playwright install chromium --with-deps
 
       - name: Run Scraper Script
         env:
