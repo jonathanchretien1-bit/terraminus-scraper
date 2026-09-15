@@ -5,22 +5,27 @@ chromium.use(stealth);
 (async () => {
   console.log('Lancement du scraper Centris (Mode Stealth)...');
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  });
   const page = await context.newPage();
 
   try {
-    // Navigation sur Centris
-    await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'domcontentloaded' });
+    console.log('Navigation sur Centris...');
+    await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'networkidle' });
     
-    // Attendre que les éléments de propriétés s'affichent
-    await page.waitForSelector('.teaser, .property-card-container, div[data-id]', { timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(3000);
+    // Attendre un peu pour laisser le JS de Centris s'exécuter
+    await page.waitForTimeout(5000);
 
-    // Extraction élargie pour attraper les fiches Centris
-    const listings = await page.$$eval('.teaser, .property-card-container, div[data-id]', cards => {
+    // Afficher le titre de la page pour voir si on est bloqué ou non
+    const pageTitle = await page.title();
+    console.log('Titre de la page récupérée :', pageTitle);
+
+    // Extraction large de tous les blocs potentiels
+    const listings = await page.$$eval('.property-card-container, .teaser, div[data-id]', cards => {
       return cards.map(card => {
         const priceEl = card.querySelector('.price, [itemprop="price"]');
-        const linkEl = card.querySelector('a.property-thumbnail, a.thumbnail');
+        const linkEl = card.querySelector('a.property-thumbnail, a');
         const addressEl = card.querySelector('.address, [itemprop="address"]');
         
         return {
@@ -28,19 +33,20 @@ chromium.use(stealth);
           price: priceEl ? priceEl.innerText.trim() : '',
           address: addressEl ? addressEl.innerText.trim() : ''
         };
-      }).filter(item => item.url); // Garde uniquement ceux qui ont un lien valide
+      }).filter(item => item.url && item.url.includes('/property/'));
     });
 
     console.log(`${listings.length} terrains extraits de la page.`);
 
-    // Envoi sécurisé vers ton endpoint Base44
+    // Envoi vers Base44 (même si listings est vide, pour tester si le secret passe enfin)
     const base44Url = 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
     
+    console.log('Envoi vers Base44 avec le secret...');
     const response = await fetch(base44Url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-ingest-secret': process.env.CENTRIS_INGEST_SECRET
+        'x-ingest-secret': process.env.CENTRIS_INGEST_SECRET || ''
       },
       body: JSON.stringify({ listings })
     });
