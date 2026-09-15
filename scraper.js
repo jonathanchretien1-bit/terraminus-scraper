@@ -12,29 +12,29 @@ chromium.use(stealth);
     // Navigation sur Centris
     await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'domcontentloaded' });
     
-    // Attendre que les cartes de propriétés s'affichent
-    await page.waitForSelector('.property-card-container, .desc', { timeout: 10000 }).catch(() => {});
+    // Attendre que les éléments de propriétés s'affichent
+    await page.waitForSelector('.teaser, .property-card-container, div[data-id]', { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(3000);
 
-    // Extraction des fiches avec les bons sélecteurs Centris
-    const listings = await page.$$eval('.property-card-container', cards => {
+    // Extraction élargie pour attraper les fiches Centris
+    const listings = await page.$$eval('.teaser, .property-card-container, div[data-id]', cards => {
       return cards.map(card => {
-        const priceEl = card.querySelector('.price');
-        const linkEl = card.querySelector('a.property-thumbnail');
-        const addressEl = card.querySelector('.address');
+        const priceEl = card.querySelector('.price, [itemprop="price"]');
+        const linkEl = card.querySelector('a.property-thumbnail, a.thumbnail');
+        const addressEl = card.querySelector('.address, [itemprop="address"]');
         
         return {
           url: linkEl ? linkEl.href : '',
           price: priceEl ? priceEl.innerText.trim() : '',
           address: addressEl ? addressEl.innerText.trim() : ''
         };
-      });
+      }).filter(item => item.url); // Garde uniquement ceux qui ont un lien valide
     });
 
     console.log(`${listings.length} terrains extraits de la page.`);
 
     // Envoi sécurisé vers ton endpoint Base44
-    const base44Url = 'https://earth-minus-scale.base44.app/functions/runCentrisScrape'; // Remplace par ta vraie URL
+    const base44Url = 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
     
     const response = await fetch(base44Url, {
       method: 'POST',
