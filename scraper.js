@@ -38,15 +38,13 @@ chromium.use(stealth);
     const rawLinks = await page.$$eval('a', links => links.map(l => l.href));
     console.log(`Total de liens bruts trouvés sur la page : ${rawLinks.length}`);
 
-    // Filtrer les liens d'annonces
-    const propertyLinks = rawLinks.filter(href => href && (href.includes('/propriete/') || href.includes('-a-vendre/')));
+   // Filtrer tous les liens qui ont l'air d'être des fiches de propriétés (par ID ou format d'URL Centris)
+    const propertyLinks = rawLinks.filter(href => href && (href.includes('/fr/terrain') || href.includes('/fr/propriete') || href.includes('/en/')));
     const uniqueListings = Array.from(new Set(propertyLinks)).map(url => ({
-      url,
+      url: url.startsWith('http') ? url : `https://www.centris.ca${url}`,
       price: '',
       address: ''
     }));
-
-    console.log(`Terrains uniques filtrés : ${uniqueListings.length}`);
 
     // Envoi vers Base44
     const base44Url = 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
