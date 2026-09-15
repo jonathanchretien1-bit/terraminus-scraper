@@ -28,7 +28,7 @@ chromium.use(stealth);
     console.log(`${listings.length} terrains trouvés. Envoi vers Base44...`);
 
     // Envoi des données vers ton endpoint Base44 sécurisé
-    const response = await fetch('TON_URL_BASE44_ENDPOINT/runCentrisScrape', {
+    const response = await fetch('https://earth-minus-scale.base44.app/functions/runCentrisScrape', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
