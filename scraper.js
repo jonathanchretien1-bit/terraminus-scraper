@@ -15,13 +15,12 @@ chromium.use(stealth);
     // Attendre le chargement des fiches ou de la carte
     await page.waitForTimeout(5000);
 
-    // Extraction des données de base (à adapter selon la structure exacte des cartes Centris)
+    // Extraction des données de base
     const listings = await page.$$eval('.property-card', cards => {
       return cards.map(card => {
         return {
           url: card.querySelector('a')?.href || '',
-          price: card.querySelector('.price']?.innerText || '',
-          // Récupération des données textuelles ou attributs géospatiaux disponibles
+          price: card.querySelector('.price')?.innerText || '',
         };
       });
     });
