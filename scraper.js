@@ -3,62 +3,70 @@ const stealth = require('puppeteer-extra-plugin-stealth')();
 chromium.use(stealth);
 
 (async () => {
-  console.log('Lancement du scraper Centris (Debug Liens)...');
+  console.log('Lancement du scraper Centris (Multi-pages)...');
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
   });
   const page = await context.newPage();
 
+  const allListings = new Set();
+
   try {
     console.log('Navigation sur Centris...');
     await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'networkidle' });
-    
-    await page.waitForTimeout(5000);
-    console.log('Défilement de la page pour charger les fiches...');
-    await page.evaluate(async () => {
-      await new Promise((resolve) => {
-        let totalHeight = 0;
-        const distance = 500;
-        const timer = setInterval(() => {
-          window.scrollBy(0, distance);
-          totalHeight += distance;
-          if (totalHeight >= 3000 || totalHeight >= document.body.scrollHeight) {
-            clearInterval(timer);
-            resolve();
-          }
-        }, 300);
-      });
-    });
+    await page.waitForTimeout(4000);
 
-    await page.waitForTimeout(3000);
+    let hasNextPage = true;
+    let pageNum = 1;
 
-    const rawLinks = await page.$$eval('a', links => links.map(l => l.href).filter(Boolean));
-    console.log(`Total de liens bruts trouvés : ${rawLinks.length}`);
+    while (hasNextPage && pageNum < 50) { // Limite de sécurité à 50 pages (ajustable)
+      console.log(`--- Scraping de la page ${pageNum} ---`);
+      
+      // Petit scroll pour s'assurer que tout est chargé sur la page courante
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.waitForTimeout(2000);
 
-    // Afficher 5 exemples de liens pour comprendre leur format exact dans les logs GitHub
-    console.log("Exemples de liens bruts:", rawLinks.slice(0, 5));
+      // Récupérer les liens de la page
+      const rawLinks = await page.$$eval('a', links => links.map(l => l.href).filter(Boolean));
+      const propertyLinks = rawLinks.filter(href => href.includes('centris.ca') && href.includes('~'));
+      
+      propertyLinks.forEach(link => allListings.add(link));
+      console.log(`Total cumulé de terrains uniques : ${allListings.size}`);
 
-    // Filtre élargi : les fiches sur Centris contiennent généralement '~' ou 'terrain'
-    const propertyLinks = rawLinks.filter(href => href.includes('centris.ca') && (href.includes('~') || href.includes('terrain')));
-    const uniqueListings = Array.from(new Set(propertyLinks)).map(url => ({
+      // Chercher le bouton "Suivant"
+      const nextButton = await page.$('li.PagedList-skipToNext a, a.next, [rel="next"]');
+      if (nextButton) {
+        const isDisabled = await page.$eval('li.PagedList-skipToNext', el => el.classList.contains('disabled')).catch(() => false);
+        if (isDisabled) {
+          hasNextPage = false;
+        } else {
+          await nextButton.click();
+          await page.waitForTimeout(4000);
+          pageNum++;
+        }
+      } else {
+        hasNextPage = false;
+      }
+    }
+
+    const uniqueListings = Array.from(allListings).map(url => ({
       url,
       price: '',
       address: ''
     }));
 
-    console.log(`Terrains uniques prêts à envoyer : ${uniqueListings.length}`);
+    console.log(`Envoi de ${uniqueListings.length} terrains vers Base44...`);
 
     const base44Url = 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
     const secretValue = process.env.CENTRIS_INGEST_SECRET ? process.env.CENTRIS_INGEST_SECRET.trim() : '';
 
-    console.log('Envoi vers Base44...');
     const response = await fetch(base44Url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-ingest-secret': secretValue,
-        'Authorization': `Bearer ${secretValue}` // Sécurité au cas où Base44 lit le header Bearer
+        'Authorization': `Bearer ${secretValue}`
       },
       body: JSON.stringify({ listings: uniqueListings })
     });
