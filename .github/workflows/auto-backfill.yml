@@ -1,0 +1,27 @@
+name: Auto Backfill Centris
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # S'exécute automatiquement toutes les 6 heures
+  workflow_dispatch: # Permet le déclenchement manuel
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run Auto Backfill
+        env:
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          CENTRIS_INGEST_SECRET: ${{ secrets.CENTRIS_INGEST_SECRET }}
+        run: node auto-backfill.js
