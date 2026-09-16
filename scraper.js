@@ -29,7 +29,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
 }
 
 (async () => {
-  console.log('Lancement du scraper Centris "Deep Scraping" (Prix + Courtiers Amélioré)...');
+  console.log('Lancement du scraper Centris "Deep Scraping" (Prix + GPS + Courtiers Complète)...');
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
@@ -90,7 +90,11 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     for (const url of allUrls) {
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        await page.waitForTimeout(4000); // Laisse le temps à Centris d'hydrater la page
+        await page.waitForTimeout(4000); // Temps pour l'hydratation de la page
+
+        // Defillement doux vers le bas pour declencher le chargement lazy-loading des cartes courtiers
+        await page.evaluate(() => window.scrollBy(0, 500));
+        await page.waitForTimeout(1000);
 
         const propertyData = await page.evaluate((currentUrl) => {
           // --- 1. EXTRACTION DU PRIX ---
@@ -113,7 +117,6 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
             }
           }
 
-          // Plan B Prix : Recherche dans le texte global ou scripts si le sélecteur échoue
           if (!price) {
             const priceEl = Array.from(document.querySelectorAll('span, div')).find(el => 
               el.textContent.match(/\d{1,3}(?:[ \xA0]\d{3})*\s*\$/) && el.textContent.length < 30
@@ -144,36 +147,38 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
              }
           }
 
-          // --- 3. EXTRACTION COURTIER, AGENCE, TÉLÉPHONE ---
+          // --- 3. EXTRACTION ROBUSTE COURTIER, AGENCE, TÉLÉPHONE ---
           let broker_name = '';
           let broker_agency = '';
           let broker_phone = '';
 
-          // Recherche ciblée dans les blocs de courtier Centris
-          const brokerCard = document.querySelector('.broker-info-details, .broker-details, [class*="Broker"], .contact-broker');
-          if (brokerCard) {
-             const nameEl = brokerCard.querySelector('.text-bold, h4, .name, [itemprop="name"]');
-             if (nameEl) broker_name = nameEl.textContent.trim();
+          // Stratégie A : ciblage DOM dans le bloc d'informations du courtier
+          const brokerContainer = document.querySelector('.broker-info, .brokerDetailsContainer, .agency-container, [itemtype*="RealEstateAgent"], .contact-broker, .teaser-item');
+          const searchContext = brokerContainer || document;
 
-             const agencyEl = brokerCard.querySelector('.agency, .banner, [itemprop="memberOf"], span:not([class])');
-             if (agencyEl) broker_agency = agencyEl.textContent.trim();
+          const nameEl = searchContext.querySelector('a[href*="/courtier-immobilier/"] span, .broker-name, [itemprop="name"], .name, h4.text-bold, .uniquebrokername');
+          if (nameEl) broker_name = nameEl.textContent.trim().replace(/\s+/g, ' ');
 
-             const phoneEl = brokerCard.querySelector('a[href^="tel:"], [itemprop="telephone"]');
-             if (phoneEl) broker_phone = phoneEl.textContent.trim() || phoneEl.getAttribute('href')?.replace('tel:', '').trim();
+          const agencyEl = searchContext.querySelector('.agency-name, .broker-agency, [itemprop="memberOf"], .agency, .banner-name, .broker-agency-name');
+          if (agencyEl) broker_agency = agencyEl.textContent.trim().replace(/\s+/g, ' ');
+
+          const phoneEl = searchContext.querySelector('a[href^="tel:"], [itemprop="telephone"], .broker-phone, .phone-number');
+          if (phoneEl) {
+             broker_phone = phoneEl.textContent.trim() || phoneEl.getAttribute('href')?.replace('tel:', '').trim();
           }
 
-          // Plan B Global via les scripts JSON intégrés de Centris
-          if (!broker_name || !broker_phone) {
+          // Stratégie B : Analyse des scripts de données JSON internes à la page
+          if (!broker_name || !broker_agency) {
              const scripts = Array.from(document.querySelectorAll('script'));
              for (const script of scripts) {
-                const text = script.innerText;
-                if (text.includes('Broker') || text.includes('Courtier') || text.includes('Phone')) {
+                const text = script.innerText || '';
+                if (text.includes('Broker') || text.includes('Courtier') || text.includes('Agency') || text.includes('Agence')) {
                    const nameMatch = text.match(/"(?:FullName|BrokerName|NomCourtier|Name)"\s*:\s*"([^"]+)"/i);
                    const agencyMatch = text.match(/"(?:AgencyName|NomAgence|BannerName|Agency)"\s*:\s*"([^"]+)"/i);
                    const phoneMatch = text.match(/"(?:Phone|Telephone|OfficePhone|CellPhone)"\s*:\s*"([^"]+)"/i);
                    
-                   if (!broker_name && nameMatch && nameMatch[1].length > 3) broker_name = nameMatch[1];
-                   if (!broker_agency && agencyMatch) broker_agency = agencyMatch[1];
+                   if (!broker_name && nameMatch && nameMatch[1].length > 2) broker_name = nameMatch[1];
+                   if (!broker_agency && agencyMatch && agencyMatch[1].length > 2) broker_agency = agencyMatch[1];
                    if (!broker_phone && phoneMatch) broker_phone = phoneMatch[1];
                 }
              }
@@ -192,7 +197,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
           return { price, address: fullAddress, municipality, lat, lng, broker_name, broker_agency, broker_phone };
         }, url);
 
-        console.log(`[${count}/${allUrls.size}] Ville: "${propertyData.municipality}" | Prix: "${propertyData.price}" | Courtier: "${propertyData.broker_name}" | Tél: "${propertyData.broker_phone}"`);
+        console.log(`[${count}/${allUrls.size}] Ville: "${propertyData.municipality}" | Prix: "${propertyData.price}" | Courtier: "${propertyData.broker_name}" | Agence: "${propertyData.broker_agency}" | Tél: "${propertyData.broker_phone}"`);
 
         finalResults.push({
           url: url,
