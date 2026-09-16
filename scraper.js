@@ -13,8 +13,8 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     method: "POST",
     headers: { 
       "Content-Type": "application/json",
-      "x-ingest-secret": INGEST_SECRET,          // Ajouté pour Base44
-      "Authorization": `Bearer ${INGEST_SECRET}` // Ajouté pour Base44
+      "x-ingest-secret": INGEST_SECRET,
+      "Authorization": `Bearer ${INGEST_SECRET}`
     },
     body: JSON.stringify({ secret: INGEST_SECRET, listings }),
   });
@@ -29,14 +29,15 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
 }
 
 (async () => {
-  console.log('Lancement du scraper Centris (Multi-pages)...');
+  console.log('Lancement du scraper Centris robuste (Multi-pages)...');
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
   });
   const page = await context.newPage();
 
-  const allListings = new Set();
+  // Utilisation d'un Map pour éviter les doublons basés sur l'URL
+  const allListings = new Map();
   const maxPages = parseInt(process.env.MAX_PAGES || "10", 10);
 
   try {
@@ -53,11 +54,51 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       await page.waitForTimeout(2000);
 
-      const rawLinks = await page.$$eval('a', links => links.map(l => l.href).filter(Boolean));
-      const propertyLinks = rawLinks.filter(href => href.includes('centris.ca') && href.includes('~'));
+      // --- DÉBUT DU SCRAPING ROBUSTE ---
+      const pageListings = await page.evaluate(() => {
+        // Cibler les conteneurs de cartes de propriétés
+        const cards = Array.from(document.querySelectorAll('div.thumbnailItem, div.property-thumbnail-item, article'));
+        const results = [];
+
+        for (const card of cards) {
+          const linkEl = card.querySelector('a[href*="/fr/terrain~"]');
+          if (!linkEl) continue;
+
+          const url = linkEl.href;
+          const priceEl = card.querySelector('.price, [itemprop="price"]');
+          const addressEl = card.querySelector('.address, .location, [itemprop="address"]');
+
+          let price = priceEl ? priceEl.textContent.trim().replace(/\s+/g, ' ') : '';
+          let fullAddress = addressEl ? addressEl.textContent.trim().replace(/\s+/g, ' ') : '';
+
+          // Extraction de la municipalité directement depuis l'URL (Failsafe 100% fiable)
+          let municipality = '';
+          const match = url.match(/~a-vendre~([^/]+)/);
+          if (match && match[1]) {
+             // Remplace les tirets par des espaces et met une majuscule au début
+             municipality = match[1]
+               .split('-')
+               .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+               .join(' ');
+          }
+
+          results.push({
+            url,
+            price,
+            address: fullAddress,
+            municipality // On s'assure d'envoyer la municipalité pour passer ta validation
+          });
+        }
+        return results;
+      });
+      // --- FIN DU SCRAPING ROBUSTE ---
       
-      propertyLinks.forEach(link => allListings.add(link));
-      console.log(`Total cumulé de terrains uniques : ${allListings.size}`);
+      // Ajout au Map (écrase les doublons potentiels)
+      pageListings.forEach(listing => {
+        allListings.set(listing.url, listing);
+      });
+      
+      console.log(`Total cumulé de terrains uniques extraits : ${allListings.size}`);
 
       const nextButton = await page.$('li.PagedList-skipToNext a, a.next, [rel="next"]');
       if (nextButton) {
@@ -74,21 +115,10 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       }
     }
 
-    const uniqueListings = Array.from(allListings).map(url => ({
-      url,
-      price: '',
-      address: ''
-    }));
+    const uniqueListings = Array.from(allListings.values());
 
     const INGEST_URL = process.env.INGEST_URL || 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
     const INGEST_SECRET = process.env.CENTRIS_INGEST_SECRET || process.env.INGEST_SECRET || '';
-
-    // --- DÉBUT DU BLOC DE DÉBOGAGE ---
-    console.log("🔍 Longueur du secret reçu par le script :", INGEST_SECRET ? INGEST_SECRET.length : "VIDE ou UNDEFINED");
-    if (INGEST_SECRET && INGEST_SECRET.length > 3) {
-      console.log("🔍 Début du secret :", INGEST_SECRET.substring(0, 3) + "***");
-    }
-    // --- FIN DU BLOC DE DÉBOGAGE ---
 
     await ingest(uniqueListings, INGEST_URL, INGEST_SECRET);
 
