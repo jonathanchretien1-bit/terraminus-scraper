@@ -41,7 +41,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
 
   try {
     console.log('Navigation sur Centris...');
-    await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'networkidle' });
+    await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(4000);
 
     let hasNextPage = true;
