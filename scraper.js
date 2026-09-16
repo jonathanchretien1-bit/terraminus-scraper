@@ -29,7 +29,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
 }
 
 (async () => {
-  console.log('Lancement du scraper Centris "Deep Scraping" (Multi-pages + Fiches + Courtiers)...');
+  console.log('Lancement du scraper Centris "Deep Scraping" (Prix + Courtiers Amélioré)...');
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
@@ -81,7 +81,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     }
 
     // =========================================================
-    // ÉTAPE 2 : Visite individuelle pour les Détails, Coordonnées et Courtiers
+    // ÉTAPE 2 : Visite individuelle (Extraction Prix, GPS, Courtiers)
     // =========================================================
     console.log(`\nÉtape 2 : Deep Scraping de ${allUrls.size} fiches détaillées...`);
     const finalResults = [];
@@ -90,16 +90,41 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     for (const url of allUrls) {
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        await page.waitForTimeout(3000); // Pause anti-bot
+        await page.waitForTimeout(4000); // Laisse le temps à Centris d'hydrater la page
 
         const propertyData = await page.evaluate((currentUrl) => {
-          const priceEl = document.querySelector('[itemprop="price"], #BuyPrice');
-          const addressEl = document.querySelector('[itemprop="address"]');
+          // --- 1. EXTRACTION DU PRIX ---
+          let price = '';
+          const priceSelectors = [
+            'span[itemprop="price"]', 
+            '#BuyPrice', 
+            '.price-value', 
+            '[data-price]', 
+            'itemprop="price"',
+            '.property-price span',
+            'span.text-price'
+          ];
           
-          const price = priceEl ? priceEl.textContent.trim().replace(/\s+/g, ' ') : '';
+          for (const sel of priceSelectors) {
+            const el = document.querySelector(sel);
+            if (el && el.textContent.trim()) {
+              price = el.textContent.trim().replace(/\s+/g, ' ');
+              break;
+            }
+          }
+
+          // Plan B Prix : Recherche dans le texte global ou scripts si le sélecteur échoue
+          if (!price) {
+            const priceEl = Array.from(document.querySelectorAll('span, div')).find(el => 
+              el.textContent.match(/\d{1,3}(?:[ \xA0]\d{3})*\s*\$/) && el.textContent.length < 30
+            );
+            if (priceEl) price = priceEl.textContent.trim().replace(/\s+/g, ' ');
+          }
+
+          const addressEl = document.querySelector('[itemprop="address"], .address-text');
           const fullAddress = addressEl ? addressEl.textContent.trim().replace(/\s+/g, ' ') : '';
 
-          // Extraction Coordonnées GPS (Lat / Lng)
+          // --- 2. EXTRACTION GPS ---
           let lat = document.querySelector('meta[itemprop="latitude"]')?.content || null;
           let lng = document.querySelector('meta[itemprop="longitude"]')?.content || null;
 
@@ -119,38 +144,35 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
              }
           }
 
-          // --- EXTRACTION ROBUSTE DU COURTIER & AGENCE ---
+          // --- 3. EXTRACTION COURTIER, AGENCE, TÉLÉPHONE ---
           let broker_name = '';
           let broker_agency = '';
           let broker_phone = '';
 
-          // 1. Recherche via les éléments du DOM
-          const nameCandidate = document.querySelector('.broker-name, .uniquebrokername, h4.text-bold, [itemprop="seller"] [itemprop="name"], span.text-bold');
-          if (nameCandidate) {
-             broker_name = nameCandidate.textContent.trim();
+          // Recherche ciblée dans les blocs de courtier Centris
+          const brokerCard = document.querySelector('.broker-info-details, .broker-details, [class*="Broker"], .contact-broker');
+          if (brokerCard) {
+             const nameEl = brokerCard.querySelector('.text-bold, h4, .name, [itemprop="name"]');
+             if (nameEl) broker_name = nameEl.textContent.trim();
+
+             const agencyEl = brokerCard.querySelector('.agency, .banner, [itemprop="memberOf"], span:not([class])');
+             if (agencyEl) broker_agency = agencyEl.textContent.trim();
+
+             const phoneEl = brokerCard.querySelector('a[href^="tel:"], [itemprop="telephone"]');
+             if (phoneEl) broker_phone = phoneEl.textContent.trim() || phoneEl.getAttribute('href')?.replace('tel:', '').trim();
           }
 
-          const agencyCandidate = document.querySelector('.broker-agency, .agency-name, [itemprop="seller"] [itemprop="memberOf"], span.agency');
-          if (agencyCandidate) {
-             broker_agency = agencyCandidate.textContent.trim();
-          }
-
-          const phoneCandidate = document.querySelector('a[href^="tel:"], .broker-phone, [itemprop="telephone"]');
-          if (phoneCandidate) {
-             broker_phone = phoneCandidate.textContent.trim() || phoneCandidate.getAttribute('href')?.replace('tel:', '').trim();
-          }
-
-          // 2. Plan B : Analyse de secours dans les scripts globaux si vide
-          if (!broker_name || !broker_agency) {
+          // Plan B Global via les scripts JSON intégrés de Centris
+          if (!broker_name || !broker_phone) {
              const scripts = Array.from(document.querySelectorAll('script'));
              for (const script of scripts) {
                 const text = script.innerText;
-                if (text.includes('FullName') || text.includes('BrokerName') || text.includes('NomCourtier')) {
-                   const nameMatch = text.match(/"(?:FullName|BrokerName|NomCourtier)"\s*:\s*"([^"]+)"/i);
-                   const agencyMatch = text.match(/"(?:AgencyName|NomAgence|BannerName)"\s*:\s*"([^"]+)"/i);
-                   const phoneMatch = text.match(/"(?:Phone|Telephone|OfficePhone)"\s*:\s*"([^"]+)"/i);
+                if (text.includes('Broker') || text.includes('Courtier') || text.includes('Phone')) {
+                   const nameMatch = text.match(/"(?:FullName|BrokerName|NomCourtier|Name)"\s*:\s*"([^"]+)"/i);
+                   const agencyMatch = text.match(/"(?:AgencyName|NomAgence|BannerName|Agency)"\s*:\s*"([^"]+)"/i);
+                   const phoneMatch = text.match(/"(?:Phone|Telephone|OfficePhone|CellPhone)"\s*:\s*"([^"]+)"/i);
                    
-                   if (!broker_name && nameMatch) broker_name = nameMatch[1];
+                   if (!broker_name && nameMatch && nameMatch[1].length > 3) broker_name = nameMatch[1];
                    if (!broker_agency && agencyMatch) broker_agency = agencyMatch[1];
                    if (!broker_phone && phoneMatch) broker_phone = phoneMatch[1];
                 }
@@ -170,9 +192,8 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
           return { price, address: fullAddress, municipality, lat, lng, broker_name, broker_agency, broker_phone };
         }, url);
 
-        console.log(`[${count}/${allUrls.size}] Extrait -> Ville: "${propertyData.municipality}" | Courtier: "${propertyData.broker_name}" | Agence: "${propertyData.broker_agency}"`);
+        console.log(`[${count}/${allUrls.size}] Ville: "${propertyData.municipality}" | Prix: "${propertyData.price}" | Courtier: "${propertyData.broker_name}" | Tél: "${propertyData.broker_phone}"`);
 
-        // Construction du payload avec toutes les variantes demandées pour éviter les erreurs d'API
         finalResults.push({
           url: url,
           price: propertyData.price,
@@ -183,7 +204,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
           municipality: propertyData.municipality,
           lat: propertyData.lat,
           lng: propertyData.lng,
-          // Champs courtier demandés et leurs équivalents
+          
           broker_name: propertyData.broker_name,
           broker: propertyData.broker_name,
           agent: propertyData.broker_name,
