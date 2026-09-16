@@ -5,32 +5,38 @@ chromium.use(stealth);
 const INGEST_URL = process.env.INGEST_URL || 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
 const INGEST_SECRET = process.env.CENTRIS_INGEST_SECRET || process.env.INGEST_SECRET || '';
 
-// 1. Récupération dynamique des URLs incomplètes (Prix ou Courtier manquant)
+// 1. Récupération dynamique des URLs incomplètes (requête POST vers Base44)
 async function getIncompleteUrls() {
   console.log("→ Récupération des annonces incomplètes depuis Base44...");
   try {
-    const res = await fetch(`${INGEST_URL}?action=getIncomplete`, {
-      method: "GET",
+    const res = await fetch(INGEST_URL, {
+      method: "POST",
       headers: { 
+        "Content-Type": "application/json",
         "x-ingest-secret": INGEST_SECRET,
         "Authorization": `Bearer ${INGEST_SECRET}`
-      }
+      },
+      body: JSON.stringify({ 
+        action: "getIncomplete", 
+        secret: INGEST_SECRET 
+      })
     });
     
     if (!res.ok) {
-      console.error("Impossible de récupérer la liste des URLs depuis Base44.");
+      const errorText = await res.text().catch(() => '');
+      console.error(`✖ Erreur Base44 (${res.status}): ${errorText}`);
       return [];
     }
     
     const data = await res.json();
-    return data.urls || data.listings?.map(l => l.url) || [];
+    return data.urls || data.listings?.map(l => l.url) || data.items?.map(l => l.url) || [];
   } catch (err) {
-    console.error("Erreur lors de l'appel à Base44 :", err.message);
+    console.error("Erreur de connexion à Base44 :", err.message);
     return [];
   }
 }
 
-// 2. Ré-ingestion des fiches enrichies vers Base44
+// 2. Ingestion des fiches complétées
 async function ingest(listings) {
   if (!listings.length) return;
   console.log(`→ Envoi de ${listings.length} annonces mises à jour vers Base44...`);
@@ -57,7 +63,7 @@ async function ingest(listings) {
     return;
   }
 
-  console.log(`Lancement du rattrapage automatique (Prix + Courtiers) pour ${urlsToFix.length} annonces...`);
+  console.log(`Lancement du rattrapage automatique pour ${urlsToFix.length} annonces...`);
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
@@ -74,14 +80,13 @@ async function ingest(listings) {
       await page.waitForTimeout(1000);
 
       const propertyData = await page.evaluate((currentUrl) => {
-        // --- EXTRACTION DU PRIX ---
+        // --- PRIX ---
         let price = '';
         const priceSelectors = [
           'span[itemprop="price"]', 
           '#BuyPrice', 
           '.price-value', 
           '[data-price]', 
-          'itemprop="price"',
           '.property-price span',
           'span.text-price'
         ];
@@ -101,7 +106,7 @@ async function ingest(listings) {
           if (priceEl) price = priceEl.textContent.trim().replace(/\s+/g, ' ');
         }
 
-        // --- EXTRACTION COURTIER / AGENCE / TÉLÉPHONE ---
+        // --- COURTIER / AGENCE / TÉLÉPHONE ---
         let broker_name = '';
         let broker_agency = '';
         let broker_phone = '';
@@ -117,7 +122,7 @@ async function ingest(listings) {
         const phoneEl = brokerContainer.querySelector('a[href^="tel:"], [itemprop="telephone"], .broker-phone');
         if (phoneEl) broker_phone = phoneEl.textContent.trim() || phoneEl.getAttribute('href')?.replace('tel:', '').trim();
 
-        // Plan B : Recherche dans les scripts internes
+        // Plan B : Scripts internes
         if (!broker_name || !broker_agency) {
           const scripts = Array.from(document.querySelectorAll('script'));
           for (const script of scripts) {
