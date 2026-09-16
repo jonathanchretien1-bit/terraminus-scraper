@@ -29,19 +29,21 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
 }
 
 (async () => {
-  console.log('Lancement du scraper Centris robuste (Multi-pages)...');
+  console.log('Lancement du scraper Centris "Deep Scraping" (Multi-pages + Fiches)...');
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
   });
   const page = await context.newPage();
 
-  // Utilisation d'un Map pour éviter les doublons basés sur l'URL
-  const allListings = new Map();
+  const allUrls = new Set();
   const maxPages = parseInt(process.env.MAX_PAGES || "10", 10);
 
   try {
-    console.log('Navigation sur Centris...');
+    // =========================================================
+    // ÉTAPE 1 : Récolte rapide de toutes les URLs des terrains
+    // =========================================================
+    console.log('Étape 1 : Récolte des URLs sur les pages de recherche...');
     await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(4000);
 
@@ -49,56 +51,16 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     let pageNum = 1;
 
     while (hasNextPage && pageNum <= maxPages) {
-      console.log(`--- Scraping de la page ${pageNum} / ${maxPages} ---`);
+      console.log(`--- Scan de la page de résultats ${pageNum} / ${maxPages} ---`);
       
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       await page.waitForTimeout(2000);
 
-      // --- DÉBUT DU SCRAPING ROBUSTE ---
-      const pageListings = await page.evaluate(() => {
-        // Cibler les conteneurs de cartes de propriétés
-        const cards = Array.from(document.querySelectorAll('div.thumbnailItem, div.property-thumbnail-item, article'));
-        const results = [];
+      // Trouve tous les liens menant vers une fiche de terrain
+      const links = await page.$$eval('a[href*="/fr/terrain~"]', els => els.map(el => el.href));
+      links.forEach(link => allUrls.add(link));
 
-        for (const card of cards) {
-          const linkEl = card.querySelector('a[href*="/fr/terrain~"]');
-          if (!linkEl) continue;
-
-          const url = linkEl.href;
-          const priceEl = card.querySelector('.price, [itemprop="price"]');
-          const addressEl = card.querySelector('.address, .location, [itemprop="address"]');
-
-          let price = priceEl ? priceEl.textContent.trim().replace(/\s+/g, ' ') : '';
-          let fullAddress = addressEl ? addressEl.textContent.trim().replace(/\s+/g, ' ') : '';
-
-          // Extraction de la municipalité directement depuis l'URL (Failsafe 100% fiable)
-          let municipality = '';
-          const match = url.match(/~a-vendre~([^/]+)/);
-          if (match && match[1]) {
-             // Remplace les tirets par des espaces et met une majuscule au début
-             municipality = match[1]
-               .split('-')
-               .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-               .join(' ');
-          }
-
-          results.push({
-            url,
-            price,
-            address: fullAddress,
-            municipality // On s'assure d'envoyer la municipalité pour passer ta validation
-          });
-        }
-        return results;
-      });
-      // --- FIN DU SCRAPING ROBUSTE ---
-      
-      // Ajout au Map (écrase les doublons potentiels)
-      pageListings.forEach(listing => {
-        allListings.set(listing.url, listing);
-      });
-      
-      console.log(`Total cumulé de terrains uniques extraits : ${allListings.size}`);
+      console.log(`Total d'URLs uniques trouvées jusqu'à présent : ${allUrls.size}`);
 
       const nextButton = await page.$('li.PagedList-skipToNext a, a.next, [rel="next"]');
       if (nextButton) {
@@ -115,15 +77,89 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       }
     }
 
-    const uniqueListings = Array.from(allListings.values());
+    // =========================================================
+    // ÉTAPE 2 : Visite individuelle pour les Coordonnées Géospatiales
+    // =========================================================
+    console.log(`\nÉtape 2 : Deep Scraping de ${allUrls.size} fiches détaillées...`);
+    const finalResults = [];
+    let count = 1;
 
+    for (const url of allUrls) {
+      console.log(`[${count}/${allUrls.size}] Extraction : ${url}`);
+      try {
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await page.waitForTimeout(3000); // Pause vitale pour éviter les blocages
+
+        const propertyData = await page.evaluate((currentUrl) => {
+          // Extraction du Prix et Adresse
+          const priceEl = document.querySelector('[itemprop="price"], #BuyPrice');
+          const addressEl = document.querySelector('[itemprop="address"]');
+          
+          const price = priceEl ? priceEl.textContent.trim().replace(/\s+/g, ' ') : '';
+          const fullAddress = addressEl ? addressEl.textContent.trim().replace(/\s+/g, ' ') : '';
+
+          // Extraction des coordonnées Lat/Lng de la carte
+          let lat = document.querySelector('meta[itemprop="latitude"]')?.content || null;
+          let lng = document.querySelector('meta[itemprop="longitude"]')?.content || null;
+
+          // Si les balises meta sont absentes, on cherche dans les scripts de la page
+          if (!lat || !lng) {
+             const scripts = Array.from(document.querySelectorAll('script'));
+             for (const script of scripts) {
+                const text = script.innerText;
+                if (text.includes('Latitude') && text.includes('Longitude')) {
+                   const latMatch = text.match(/"Latitude"\s*:\s*([\d.-]+)/i);
+                   const lngMatch = text.match(/"Longitude"\s*:\s*([\d.-]+)/i);
+                   if (latMatch && lngMatch) {
+                       lat = latMatch[1];
+                       lng = lngMatch[1];
+                       break;
+                   }
+                }
+             }
+          }
+
+          // Extraction infaillible de la municipalité depuis l'URL
+          let municipality = '';
+          const match = currentUrl.match(/~a-vendre~([^/]+)/);
+          if (match && match[1]) {
+             municipality = match[1]
+               .split('-')
+               .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+               .join(' ');
+          }
+
+          return { price, address: fullAddress, municipality, lat, lng };
+        }, url);
+
+        // Intégration stricte de ton bloc de code avec le support des coordonnées
+        finalResults.push({
+          url: url,
+          price: propertyData.price,
+          address: propertyData.address,
+          municipalite: propertyData.municipality, // Sans accent
+          "municipalité": propertyData.municipality, // Avec accent
+          lat: propertyData.lat,
+          lng: propertyData.lng
+        });
+
+      } catch (err) {
+        console.error(`✖ Erreur de chargement pour ${url}:`, err.message);
+        // On continue la boucle même si une page plante
+      }
+      count++;
+    }
+
+    // =========================================================
+    // ÉTAPE 3 : Ingestion vers Base44
+    // =========================================================
     const INGEST_URL = process.env.INGEST_URL || 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
     const INGEST_SECRET = process.env.CENTRIS_INGEST_SECRET || process.env.INGEST_SECRET || '';
 
-    await ingest(uniqueListings, INGEST_URL, INGEST_SECRET);
+    await ingest(finalResults, INGEST_URL, INGEST_SECRET);
 
   } catch (error) {
-    console.error('Erreur lors du scraping:', error);
+    console.error('Erreur globale lors du scraping:', error);
     process.exit(1);
   } finally {
     await browser.close();
