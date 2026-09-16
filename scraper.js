@@ -41,7 +41,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
 
   try {
     // =========================================================
-    // ÉTAPE 1 : Récolte rapide de toutes les URLs des terrains
+    // ÉTAPE 1 : Récolte et filtrage strict des URLs de terrains
     // =========================================================
     console.log('Étape 1 : Récolte des URLs sur les pages de recherche...');
     await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -56,11 +56,16 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       await page.waitForTimeout(2000);
 
-      // Trouve tous les liens menant vers une fiche de terrain
-      const links = await page.$$eval('a[href*="/fr/terrain~"]', els => els.map(el => el.href));
+      // Récupère uniquement les liens de fiches valides (se terminant par l'ID numérique)
+      const links = await page.$$eval('a[href*="/fr/terrain~"]', els => 
+        els
+          .map(el => el.href)
+          .filter(href => href && /\/\d+$/.test(href))
+      );
+      
       links.forEach(link => allUrls.add(link));
 
-      console.log(`Total d'URLs uniques trouvées jusqu'à présent : ${allUrls.size}`);
+      console.log(`Total d'URLs de terrains uniques trouvées : ${allUrls.size}`);
 
       const nextButton = await page.$('li.PagedList-skipToNext a, a.next, [rel="next"]');
       if (nextButton) {
@@ -78,7 +83,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     }
 
     // =========================================================
-    // ÉTAPE 2 : Visite individuelle pour les Coordonnées Géospatiales
+    // ÉTAPE 2 : Visite individuelle pour les Coordonnées et Détails
     // =========================================================
     console.log(`\nÉtape 2 : Deep Scraping de ${allUrls.size} fiches détaillées...`);
     const finalResults = [];
@@ -88,21 +93,18 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       console.log(`[${count}/${allUrls.size}] Extraction : ${url}`);
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        await page.waitForTimeout(3000); // Pause vitale pour éviter les blocages
+        await page.waitForTimeout(3000); // Pause anti-bot
 
         const propertyData = await page.evaluate((currentUrl) => {
-          // Extraction du Prix et Adresse
           const priceEl = document.querySelector('[itemprop="price"], #BuyPrice');
           const addressEl = document.querySelector('[itemprop="address"]');
           
           const price = priceEl ? priceEl.textContent.trim().replace(/\s+/g, ' ') : '';
           const fullAddress = addressEl ? addressEl.textContent.trim().replace(/\s+/g, ' ') : '';
 
-          // Extraction des coordonnées Lat/Lng de la carte
           let lat = document.querySelector('meta[itemprop="latitude"]')?.content || null;
           let lng = document.querySelector('meta[itemprop="longitude"]')?.content || null;
 
-          // Si les balises meta sont absentes, on cherche dans les scripts de la page
           if (!lat || !lng) {
              const scripts = Array.from(document.querySelectorAll('script'));
              for (const script of scripts) {
@@ -119,7 +121,6 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
              }
           }
 
-          // Extraction infaillible de la municipalité depuis l'URL
           let municipality = '';
           const match = currentUrl.match(/~a-vendre~([^/]+)/);
           if (match && match[1]) {
@@ -132,7 +133,6 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
           return { price, address: fullAddress, municipality, lat, lng };
         }, url);
 
-        // Intégration stricte de ton bloc de code avec le support des coordonnées
         finalResults.push({
           url: url,
           price: propertyData.price,
@@ -145,7 +145,6 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
 
       } catch (err) {
         console.error(`✖ Erreur de chargement pour ${url}:`, err.message);
-        // On continue la boucle même si une page plante
       }
       count++;
     }
