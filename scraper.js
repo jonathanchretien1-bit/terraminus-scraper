@@ -83,6 +83,13 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     const INGEST_URL = process.env.INGEST_URL || 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
     const INGEST_SECRET = process.env.CENTRIS_INGEST_SECRET || process.env.INGEST_SECRET || '';
 
+    // --- DÉBUT DU BLOC DE DÉBOGAGE ---
+    console.log("🔍 Longueur du secret reçu par le script :", INGEST_SECRET ? INGEST_SECRET.length : "VIDE ou UNDEFINED");
+    if (INGEST_SECRET && INGEST_SECRET.length > 3) {
+      console.log("🔍 Début du secret :", INGEST_SECRET.substring(0, 3) + "***");
+    }
+    // --- FIN DU BLOC DE DÉBOGAGE ---
+
     await ingest(uniqueListings, INGEST_URL, INGEST_SECRET);
 
   } catch (error) {
