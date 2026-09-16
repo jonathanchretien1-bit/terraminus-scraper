@@ -73,8 +73,8 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       address: ''
     }));
 
-    const INGEST_URL = process.env.INGEST_URL;
-    const INGEST_SECRET = process.env.CENTRIS_INGEST_SECRET || process.env.INGEST_SECRET;
+    const INGEST_URL = process.env.INGEST_URL || 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
+    const INGEST_SECRET = process.env.CENTRIS_INGEST_SECRET || process.env.INGEST_SECRET || '';
 
     await ingest(uniqueListings, INGEST_URL, INGEST_SECRET);
 
