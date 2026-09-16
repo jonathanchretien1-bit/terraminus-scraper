@@ -119,29 +119,42 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
              }
           }
 
-          // Extraction des informations du courtier (Nom, Agence, Téléphone)
-          // Centris structure généralement les infos du courtier dans la section "brokerinfo" ou blocs similaires
+          // --- EXTRACTION ROBUSTE DU COURTIER & AGENCE ---
           let broker_name = '';
           let broker_agency = '';
           let broker_phone = '';
 
-          const nameEl = document.querySelector('.broker-name, [itemprop="seller"] [itemprop="name"], .uniquebrokername, div.row.broker-info span.text-bold');
-          if (nameEl) {
-            broker_name = nameEl.textContent.trim();
-          } else {
-            // Approche de secours via les métadonnées ou structure alternative
-            const altNameEl = document.querySelector('.brokerDetailsContainer .text-bold, .broker-info-card h4');
-            if (altNameEl) broker_name = altNameEl.textContent.trim();
+          // 1. Recherche via les éléments du DOM
+          const nameCandidate = document.querySelector('.broker-name, .uniquebrokername, h4.text-bold, [itemprop="seller"] [itemprop="name"], span.text-bold');
+          if (nameCandidate) {
+             broker_name = nameCandidate.textContent.trim();
           }
 
-          const agencyEl = document.querySelector('.broker-agency, [itemprop="seller"] [itemprop="memberOf"], .agency-name, .broker-info-card .agency');
-          if (agencyEl) {
-            broker_agency = agencyEl.textContent.trim();
+          const agencyCandidate = document.querySelector('.broker-agency, .agency-name, [itemprop="seller"] [itemprop="memberOf"], span.agency');
+          if (agencyCandidate) {
+             broker_agency = agencyCandidate.textContent.trim();
           }
 
-          const phoneEl = document.querySelector('a[href^="tel:"], .broker-phone, [itemprop="telephone"]');
-          if (phoneEl) {
-            broker_phone = phoneEl.textContent.trim() || phoneEl.getAttribute('href')?.replace('tel:', '').trim();
+          const phoneCandidate = document.querySelector('a[href^="tel:"], .broker-phone, [itemprop="telephone"]');
+          if (phoneCandidate) {
+             broker_phone = phoneCandidate.textContent.trim() || phoneCandidate.getAttribute('href')?.replace('tel:', '').trim();
+          }
+
+          // 2. Plan B : Analyse de secours dans les scripts globaux si vide
+          if (!broker_name || !broker_agency) {
+             const scripts = Array.from(document.querySelectorAll('script'));
+             for (const script of scripts) {
+                const text = script.innerText;
+                if (text.includes('FullName') || text.includes('BrokerName') || text.includes('NomCourtier')) {
+                   const nameMatch = text.match(/"(?:FullName|BrokerName|NomCourtier)"\s*:\s*"([^"]+)"/i);
+                   const agencyMatch = text.match(/"(?:AgencyName|NomAgence|BannerName)"\s*:\s*"([^"]+)"/i);
+                   const phoneMatch = text.match(/"(?:Phone|Telephone|OfficePhone)"\s*:\s*"([^"]+)"/i);
+                   
+                   if (!broker_name && nameMatch) broker_name = nameMatch[1];
+                   if (!broker_agency && agencyMatch) broker_agency = agencyMatch[1];
+                   if (!broker_phone && phoneMatch) broker_phone = phoneMatch[1];
+                }
+             }
           }
 
           // Extraction de la Municipalité depuis l'URL
