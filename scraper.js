@@ -3,7 +3,7 @@ const stealth = require('puppeteer-extra-plugin-stealth')();
 chromium.use(stealth);
 
 (async () => {
-  console.log('Lancement du scraper Centris (Scroll & Debug)...');
+  console.log('Lancement du scraper Centris (Final)...');
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
@@ -14,7 +14,6 @@ chromium.use(stealth);
     console.log('Navigation sur Centris...');
     await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'networkidle' });
     
-    // Attendre que la page charge et faire un scroll pour déclencher le chargement des fiches
     await page.waitForTimeout(5000);
     console.log('Défilement de la page pour charger les fiches...');
     await page.evaluate(async () => {
@@ -34,17 +33,18 @@ chromium.use(stealth);
 
     await page.waitForTimeout(3000);
 
-    // Extraction des liens de propriétés
+    // Récupérer tous les liens et filtrer ceux qui contiennent une fiche d'annonce Centris
     const rawLinks = await page.$$eval('a', links => links.map(l => l.href));
     console.log(`Total de liens bruts trouvés sur la page : ${rawLinks.length}`);
 
-   // Filtrer tous les liens qui ont l'air d'être des fiches de propriétés (par ID ou format d'URL Centris)
-    const propertyLinks = rawLinks.filter(href => href && (href.includes('/fr/terrain') || href.includes('/fr/propriete') || href.includes('/en/')));
+    const propertyLinks = rawLinks.filter(href => href && (href.includes('/fr/') && href.includes('-a-vendre/')));
     const uniqueListings = Array.from(new Set(propertyLinks)).map(url => ({
       url: url.startsWith('http') ? url : `https://www.centris.ca${url}`,
       price: '',
       address: ''
     }));
+
+    console.log(`Terrains uniques prêts à envoyer : ${uniqueListings.length}`);
 
     // Envoi vers Base44
     const base44Url = 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
