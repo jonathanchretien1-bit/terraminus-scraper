@@ -29,7 +29,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
 }
 
 (async () => {
-  console.log('Lancement du scraper Centris "Deep Scraping" (Multi-pages + Fiches)...');
+  console.log('Lancement du scraper Centris "Deep Scraping" (Multi-pages + Fiches + Courtiers)...');
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
@@ -40,6 +40,9 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
   const maxPages = parseInt(process.env.MAX_PAGES || "10", 10);
 
   try {
+    // =========================================================
+    // ÉTAPE 1 : Récolte et filtrage strict des URLs de terrains
+    // =========================================================
     console.log('Étape 1 : Récolte des URLs sur les pages de recherche...');
     await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(4000);
@@ -77,6 +80,9 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       }
     }
 
+    // =========================================================
+    // ÉTAPE 2 : Visite individuelle pour les Détails, Coordonnées et Courtiers
+    // =========================================================
     console.log(`\nÉtape 2 : Deep Scraping de ${allUrls.size} fiches détaillées...`);
     const finalResults = [];
     let count = 1;
@@ -84,7 +90,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     for (const url of allUrls) {
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(3000); // Pause anti-bot
 
         const propertyData = await page.evaluate((currentUrl) => {
           const priceEl = document.querySelector('[itemprop="price"], #BuyPrice');
@@ -93,6 +99,7 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
           const price = priceEl ? priceEl.textContent.trim().replace(/\s+/g, ' ') : '';
           const fullAddress = addressEl ? addressEl.textContent.trim().replace(/\s+/g, ' ') : '';
 
+          // Extraction Coordonnées GPS (Lat / Lng)
           let lat = document.querySelector('meta[itemprop="latitude"]')?.content || null;
           let lng = document.querySelector('meta[itemprop="longitude"]')?.content || null;
 
@@ -112,6 +119,32 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
              }
           }
 
+          // Extraction des informations du courtier (Nom, Agence, Téléphone)
+          // Centris structure généralement les infos du courtier dans la section "brokerinfo" ou blocs similaires
+          let broker_name = '';
+          let broker_agency = '';
+          let broker_phone = '';
+
+          const nameEl = document.querySelector('.broker-name, [itemprop="seller"] [itemprop="name"], .uniquebrokername, div.row.broker-info span.text-bold');
+          if (nameEl) {
+            broker_name = nameEl.textContent.trim();
+          } else {
+            // Approche de secours via les métadonnées ou structure alternative
+            const altNameEl = document.querySelector('.brokerDetailsContainer .text-bold, .broker-info-card h4');
+            if (altNameEl) broker_name = altNameEl.textContent.trim();
+          }
+
+          const agencyEl = document.querySelector('.broker-agency, [itemprop="seller"] [itemprop="memberOf"], .agency-name, .broker-info-card .agency');
+          if (agencyEl) {
+            broker_agency = agencyEl.textContent.trim();
+          }
+
+          const phoneEl = document.querySelector('a[href^="tel:"], .broker-phone, [itemprop="telephone"]');
+          if (phoneEl) {
+            broker_phone = phoneEl.textContent.trim() || phoneEl.getAttribute('href')?.replace('tel:', '').trim();
+          }
+
+          // Extraction de la Municipalité depuis l'URL
           let municipality = '';
           const match = currentUrl.match(/~a-vendre~([^/]+)/);
           if (match && match[1]) {
@@ -121,22 +154,37 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
                .join(' ');
           }
 
-          return { price, address: fullAddress, municipality, lat, lng };
+          return { price, address: fullAddress, municipality, lat, lng, broker_name, broker_agency, broker_phone };
         }, url);
 
-        // Debug log pour voir ce qui est extrait avant l'envoi
-        console.log(`[${count}/${allUrls.size}] Extrait -> Ville: "${propertyData.municipality}" | Prix: "${propertyData.price}" | Lat/Lng: ${propertyData.lat}, ${propertyData.lng}`);
+        console.log(`[${count}/${allUrls.size}] Extrait -> Ville: "${propertyData.municipality}" | Courtier: "${propertyData.broker_name}" | Agence: "${propertyData.broker_agency}"`);
 
+        // Construction du payload avec toutes les variantes demandées pour éviter les erreurs d'API
         finalResults.push({
           url: url,
           price: propertyData.price,
           address: propertyData.address,
           municipalite: propertyData.municipality,
           "municipalité": propertyData.municipality,
-          city: propertyData.municipality, // Ajout de sécurité au cas où Base44 attend "city"
-          municipality: propertyData.municipality, // Ajout de sécurité pour l'anglais
+          city: propertyData.municipality,
+          municipality: propertyData.municipality,
           lat: propertyData.lat,
-          lng: propertyData.lng
+          lng: propertyData.lng,
+          // Champs courtier demandés et leurs équivalents
+          broker_name: propertyData.broker_name,
+          broker: propertyData.broker_name,
+          agent: propertyData.broker_name,
+          courtier: propertyData.broker_name,
+          
+          broker_agency: propertyData.broker_agency,
+          agency: propertyData.broker_agency,
+          agence: propertyData.broker_agency,
+          brokerage: propertyData.broker_agency,
+          
+          broker_phone: propertyData.broker_phone,
+          phone: propertyData.broker_phone,
+          telephone: propertyData.broker_phone,
+          tel: propertyData.broker_phone
         });
 
       } catch (err) {
@@ -145,6 +193,9 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       count++;
     }
 
+    // =========================================================
+    // ÉTAPE 3 : Ingestion vers Base44
+    // =========================================================
     const INGEST_URL = process.env.INGEST_URL || 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
     const INGEST_SECRET = process.env.CENTRIS_INGEST_SECRET || process.env.INGEST_SECRET || '';
 
@@ -154,6 +205,6 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     console.error('Erreur globale lors du scraping:', error);
     process.exit(1);
   } finally {
-    await browser.close()
+    await browser.close();
   }
 })();
