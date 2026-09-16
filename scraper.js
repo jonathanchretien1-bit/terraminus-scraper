@@ -3,7 +3,7 @@ const stealth = require('puppeteer-extra-plugin-stealth')();
 chromium.use(stealth);
 
 (async () => {
-  console.log('Lancement du scraper Centris (Final)...');
+  console.log('Lancement du scraper Centris (Debug Liens)...');
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
@@ -33,20 +33,22 @@ chromium.use(stealth);
 
     await page.waitForTimeout(3000);
 
-    // Récupérer tous les liens et filtrer ceux qui contiennent une fiche d'annonce Centris
-    const rawLinks = await page.$$eval('a', links => links.map(l => l.href));
-    console.log(`Total de liens bruts trouvés sur la page : ${rawLinks.length}`);
+    const rawLinks = await page.$$eval('a', links => links.map(l => l.href).filter(Boolean));
+    console.log(`Total de liens bruts trouvés : ${rawLinks.length}`);
 
-    const propertyLinks = rawLinks.filter(href => href && (href.includes('/fr/') && href.includes('-a-vendre/')));
+    // Afficher 5 exemples de liens pour comprendre leur format exact dans les logs GitHub
+    console.log("Exemples de liens bruts:", rawLinks.slice(0, 5));
+
+    // Filtre élargi : les fiches sur Centris contiennent généralement '~' ou 'terrain'
+    const propertyLinks = rawLinks.filter(href => href.includes('centris.ca') && (href.includes('~') || href.includes('terrain')));
     const uniqueListings = Array.from(new Set(propertyLinks)).map(url => ({
-      url: url.startsWith('http') ? url : `https://www.centris.ca${url}`,
+      url,
       price: '',
       address: ''
     }));
 
     console.log(`Terrains uniques prêts à envoyer : ${uniqueListings.length}`);
 
-    // Envoi vers Base44
     const base44Url = 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
     const secretValue = process.env.CENTRIS_INGEST_SECRET ? process.env.CENTRIS_INGEST_SECRET.trim() : '';
 
@@ -55,7 +57,8 @@ chromium.use(stealth);
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-ingest-secret': secretValue
+        'x-ingest-secret': secretValue,
+        'Authorization': `Bearer ${secretValue}` // Sécurité au cas où Base44 lit le header Bearer
       },
       body: JSON.stringify({ listings: uniqueListings })
     });
