@@ -23,9 +23,9 @@ jobs:
       - name: Install Playwright Browsers
         run: npx playwright install chromium --with-deps
 
-      - name: Run Scraper Script
+    - name: Run Scraper Script
         env:
           INGEST_URL: ${{ secrets.INGEST_URL }}
-          CENTRIS_INGEST_SECRET: ${{ secrets.CENTRIS_INGEST_SECRET }}
+          INGEST_SECRET: ${{ secrets.CENTRIS_INGEST_SECRET }}
           MAX_PAGES: "10"
         run: node scraper.js
