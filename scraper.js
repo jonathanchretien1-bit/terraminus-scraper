@@ -8,12 +8,19 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     return;
   }
   console.log(`→ Envoi de ${listings.length} annonces vers ${INGEST_URL}`);
+  
   const res = await fetch(INGEST_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { 
+      "Content-Type": "application/json",
+      "x-ingest-secret": INGEST_SECRET,          // Ajouté pour Base44
+      "Authorization": `Bearer ${INGEST_SECRET}` // Ajouté pour Base44
+    },
     body: JSON.stringify({ secret: INGEST_SECRET, listings }),
   });
+  
   const data = await res.json().catch(() => ({}));
+  
   if (!res.ok) {
     console.error(`✖ Ingestion échouée (${res.status}) :`, data?.error || res.statusText);
     process.exit(1);
