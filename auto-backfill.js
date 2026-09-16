@@ -18,18 +18,21 @@ async function getIncompleteUrls() {
       },
       body: JSON.stringify({ 
         action: "getIncomplete", 
+        getIncomplete: true,
         secret: INGEST_SECRET 
       })
     });
     
-    if (!res.ok) {
-      const errorText = await res.text().catch(() => '');
-      console.error(`✖ Erreur Base44 (${res.status}): ${errorText}`);
-      return [];
-    }
+    const data = await res.json().catch(() => ({}));
+    console.log("Réponse brute de Base44 :", JSON.stringify(data));
     
-    const data = await res.json();
-    return data.urls || data.listings?.map(l => l.url) || data.items?.map(l => l.url) || [];
+    // Détection flexible des différentes structures possibles
+    const urls = data.urls || 
+                 data.listings?.map(l => l.url || l) || 
+                 data.items?.map(l => l.url || l) || 
+                 data.data?.map(l => l.url || l) || [];
+
+    return urls;
   } catch (err) {
     console.error("Erreur de connexion à Base44 :", err.message);
     return [];
