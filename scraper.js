@@ -40,9 +40,6 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
   const maxPages = parseInt(process.env.MAX_PAGES || "10", 10);
 
   try {
-    // =========================================================
-    // ÉTAPE 1 : Récolte et filtrage strict des URLs de terrains
-    // =========================================================
     console.log('Étape 1 : Récolte des URLs sur les pages de recherche...');
     await page.goto('https://www.centris.ca/fr/terrain~a-vendre', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(4000);
@@ -56,7 +53,6 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       await page.waitForTimeout(2000);
 
-      // Récupère uniquement les liens de fiches valides (se terminant par l'ID numérique)
       const links = await page.$$eval('a[href*="/fr/terrain~"]', els => 
         els
           .map(el => el.href)
@@ -64,7 +60,6 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       );
       
       links.forEach(link => allUrls.add(link));
-
       console.log(`Total d'URLs de terrains uniques trouvées : ${allUrls.size}`);
 
       const nextButton = await page.$('li.PagedList-skipToNext a, a.next, [rel="next"]');
@@ -82,18 +77,14 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       }
     }
 
-    // =========================================================
-    // ÉTAPE 2 : Visite individuelle pour les Coordonnées et Détails
-    // =========================================================
     console.log(`\nÉtape 2 : Deep Scraping de ${allUrls.size} fiches détaillées...`);
     const finalResults = [];
     let count = 1;
 
     for (const url of allUrls) {
-      console.log(`[${count}/${allUrls.size}] Extraction : ${url}`);
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        await page.waitForTimeout(3000); // Pause anti-bot
+        await page.waitForTimeout(3000);
 
         const propertyData = await page.evaluate((currentUrl) => {
           const priceEl = document.querySelector('[itemprop="price"], #BuyPrice');
@@ -133,12 +124,17 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
           return { price, address: fullAddress, municipality, lat, lng };
         }, url);
 
+        // Debug log pour voir ce qui est extrait avant l'envoi
+        console.log(`[${count}/${allUrls.size}] Extrait -> Ville: "${propertyData.municipality}" | Prix: "${propertyData.price}" | Lat/Lng: ${propertyData.lat}, ${propertyData.lng}`);
+
         finalResults.push({
           url: url,
           price: propertyData.price,
           address: propertyData.address,
-          municipalite: propertyData.municipality, // Sans accent
-          "municipalité": propertyData.municipality, // Avec accent
+          municipalite: propertyData.municipality,
+          "municipalité": propertyData.municipality,
+          city: propertyData.municipality, // Ajout de sécurité au cas où Base44 attend "city"
+          municipality: propertyData.municipality, // Ajout de sécurité pour l'anglais
           lat: propertyData.lat,
           lng: propertyData.lng
         });
@@ -149,9 +145,6 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
       count++;
     }
 
-    // =========================================================
-    // ÉTAPE 3 : Ingestion vers Base44
-    // =========================================================
     const INGEST_URL = process.env.INGEST_URL || 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
     const INGEST_SECRET = process.env.CENTRIS_INGEST_SECRET || process.env.INGEST_SECRET || '';
 
@@ -161,6 +154,6 @@ async function ingest(listings, INGEST_URL, INGEST_SECRET) {
     console.error('Erreur globale lors du scraping:', error);
     process.exit(1);
   } finally {
-    await browser.close();
+    await browser.close()
   }
 })();
