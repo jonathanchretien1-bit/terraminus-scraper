@@ -5,7 +5,7 @@ chromium.use(stealth);
 const INGEST_URL = process.env.INGEST_URL || 'https://earth-minus-scale.base44.app/functions/runCentrisScrape';
 const INGEST_SECRET = process.env.CENTRIS_INGEST_SECRET || process.env.INGEST_SECRET || '';
 
-// 1. Récupération dynamique des URLs incomplètes (requête POST vers Base44)
+// 1. Récupération dynamique des URLs incomplètes depuis Base44
 async function getIncompleteUrls() {
   console.log("→ Récupération des annonces incomplètes depuis Base44...");
   try {
@@ -24,26 +24,40 @@ async function getIncompleteUrls() {
     });
     
     const data = await res.json().catch(() => ({}));
-    console.log("Réponse brute de Base44 :", JSON.stringify(data));
+    console.log("Réponse de Base44 (urls incomplètes) :", JSON.stringify(data));
     
-    // Détection flexible des différentes structures possibles
-    const urls = data.urls || 
-                 data.listings?.map(l => l.url || l) || 
-                 data.items?.map(l => l.url || l) || 
-                 data.data?.map(l => l.url || l) || [];
+    const rawList = data.urls || data.listings || data.items || data.data || [];
+    return rawList
+      .map(item => (typeof item === 'string' ? item : item.listing_url || item.url))
+      .filter(Boolean);
 
-    return urls;
   } catch (err) {
     console.error("Erreur de connexion à Base44 :", err.message);
     return [];
   }
 }
 
-// 2. Ingestion des fiches complétées
+// 2. Ingestion des fiches complétées avec le mode UPSERT actif
 async function ingest(listings) {
   if (!listings.length) return;
-  console.log(`→ Envoi de ${listings.length} annonces mises à jour vers Base44...`);
+  console.log(`→ Envoi de ${listings.length} annonces mises à jour vers Base44 (upsert = true)...`);
   
+  const payload = {
+    secret: INGEST_SECRET,
+    upsert: true, // Clé requise pour mettre à jour les fiches existantes
+    listings: listings.map(item => ({
+      listing_url: item.url,
+      url: item.url,
+      price: item.price,
+      broker_name: item.broker_name,
+      broker_agency: item.broker_agency,
+      broker_phone: item.broker_phone,
+      municipality: item.municipality,
+      latitude: item.lat || null,
+      longitude: item.lng || null
+    }))
+  };
+
   const res = await fetch(INGEST_URL, {
     method: "POST",
     headers: { 
@@ -51,7 +65,7 @@ async function ingest(listings) {
       "x-ingest-secret": INGEST_SECRET,
       "Authorization": `Bearer ${INGEST_SECRET}`
     },
-    body: JSON.stringify({ secret: INGEST_SECRET, listings }),
+    body: JSON.stringify(payload),
   });
   
   const data = await res.json().catch(() => ({}));
@@ -125,7 +139,7 @@ async function ingest(listings) {
         const phoneEl = brokerContainer.querySelector('a[href^="tel:"], [itemprop="telephone"], .broker-phone');
         if (phoneEl) broker_phone = phoneEl.textContent.trim() || phoneEl.getAttribute('href')?.replace('tel:', '').trim();
 
-        // Plan B : Scripts internes
+        // Plan B : Extraction dans les scripts internes JSON/React
         if (!broker_name || !broker_agency) {
           const scripts = Array.from(document.querySelectorAll('script'));
           for (const script of scripts) {
@@ -142,7 +156,7 @@ async function ingest(listings) {
           }
         }
 
-        // Municipalité
+        // Municipalité depuis l'URL
         let municipality = '';
         const match = currentUrl.match(/~a-vendre~([^/]+)/);
         if (match && match[1]) {
@@ -160,25 +174,9 @@ async function ingest(listings) {
       finalResults.push({
         url: url,
         price: propertyData.price,
-        
         broker_name: propertyData.broker_name,
-        broker: propertyData.broker_name,
-        agent: propertyData.broker_name,
-        courtier: propertyData.broker_name,
-        
         broker_agency: propertyData.broker_agency,
-        agency: propertyData.broker_agency,
-        agence: propertyData.broker_agency,
-        brokerage: propertyData.broker_agency,
-        
         broker_phone: propertyData.broker_phone,
-        phone: propertyData.broker_phone,
-        telephone: propertyData.broker_phone,
-        tel: propertyData.broker_phone,
-
-        municipalite: propertyData.municipality,
-        "municipalité": propertyData.municipality,
-        city: propertyData.municipality,
         municipality: propertyData.municipality
       });
 
